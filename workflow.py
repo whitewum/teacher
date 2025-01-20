@@ -5,7 +5,7 @@ from datetime import datetime
 import asyncio
 from openai import OpenAI
 import httpx
-
+import time
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -75,7 +75,7 @@ class IntentClassifier:
     async def classify_intent(self, query: str, history: str = "") -> str:
         """分类用户意图"""
         prompt = f"""请判断用户的问题意图。只返回以下意图标签之一：
-- HANDBOOK: 与教师工作、教学、科研、规章制度相关的查询, 具体只包括{AVAILABLE}
+- HANDBOOK: 与教师工作、教学、科研、规章制度相关的查询, 具体包括{AVAILABLE}
 - CHAT: 日常对话、问候、感谢等
 - CLARIFICATION: 需要澄清或补充信息的问题
 - OTHER: 其他意图
@@ -127,7 +127,7 @@ class QueryRewriter:
 4. 如果是追问，需要合并相关上下文
 5. 如果是新问题，保持原样
 
-返回改写后的查询："""
+只需要返回改写后的查询，不要返回任何其他内容："""
 
         try:
             response = await asyncio.to_thread(
@@ -223,10 +223,9 @@ class WorkflowManager:
             
             # 记录用户消息
             self.conversation_manager.add_message(user_id, "user", message)
-            
             # 获取对话历史
             history = self.conversation_manager.build_recent_history(user_id)
-            
+
             # 分类意图
             intent = await self.intent_classifier.classify_intent(message, history)
             debug_logger.info(f"[{request_id}] 意图分类结果: {intent}")
@@ -236,6 +235,8 @@ class WorkflowManager:
                 rewritten_query = await self.query_rewriter.rewrite_query(message, history)
                 debug_logger.info(f"[{request_id}] 查询改写: {rewritten_query}")
                 
+                time_start = datetime.now()
+                debug_logger.info(f"[{request_id}] 开始流式生成答案")
                 # 流式生成答案
                 answer_chunks = []
                 async for response in self.inference_engine.generate_answer_stream(
@@ -243,9 +244,10 @@ class WorkflowManager:
                     return_context=return_context
                 ):
                     if response["type"] == "token":
+                        debug_logger.info(f"[{request_id}] 流式生成中，回复: {response['content']}")
                         answer_chunks.append(response["content"])
                     yield response
-                    
+                debug_logger.info(f"[{request_id}] 流式生成完成，耗时: {datetime.now() - time_start}")
                 # 记录完整的助手回复
                 self.conversation_manager.add_message(
                     user_id,
@@ -257,7 +259,7 @@ class WorkflowManager:
             else:
                 # 处理其他类型的消息
                 response = await self._handle_non_handbook_query(message, intent)
-                
+                debug_logger.info(f"[{request_id}] 处理非手册查询，回复: {response}")
                 # 记录助手回复
                 self.conversation_manager.add_message(user_id, "assistant", response, intent=intent)
                 
@@ -338,10 +340,10 @@ async def main():
     
     # 测试用例
     test_cases = [
-        "你好",
+        #"你好",
         "哪些劳务费可以发？",
-        "怎么申请？",
-        "谢谢你的帮助"
+       # "怎么申请？",
+        #"谢谢你的帮助"
     ]
     
     # 测试
@@ -354,7 +356,6 @@ async def main():
         # 测试普通处理
         result = await workflow.process_message(user_id, query)
         print(f"意图: {result.intent}")
-        print(f"答案: {result.answer}")
         if result.context:
             print(f"上下文: {result.context}")
         if result.rewritten_query:

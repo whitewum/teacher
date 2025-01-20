@@ -22,12 +22,20 @@ class SearchResult:
     rerank_score: float = 0.0
 
 class MultiCollectionSearcher:
-    def __init__(self, chroma_client, collection_names: List[str], alpha: float = 0.3):
-        """初始化多集合搜索器"""
+    def __init__(self, chroma_client, collection_names: List[str], collection_limits: Dict[str, int] = None, alpha: float = 0.3):
+        """初始化多集合搜索器
+        
+        Args:
+            chroma_client: ChromaDB客户端
+            collection_names: 集合名称列表
+            collection_limits: 每个集合的最大检索数量限制
+            alpha: 向量搜索权重
+        """
         self.collections = {}
         self.bm25_indexes = {}
         self.corpus_map = {}
         self.alpha = alpha
+        self.collection_limits = collection_limits or {}
 
         # 初始化embedding模型
         model_name = "BAAI/bge-m3"  # 使用与创建集合时相同的模型
@@ -89,10 +97,16 @@ class MultiCollectionSearcher:
         query_embedding = self._create_embedding(query)
 
         for collection_name in self.collections:
+            # 使用collection特定的限制，如果没有则使用默认top_k
+            collection_top_k = min(
+                self.collection_limits.get(collection_name, top_k),
+                top_k
+            )
+            
             # 向量搜索
             vector_results = self.collections[collection_name].query(
-                query_embeddings=[query_embedding],  # 使用生成的向量
-                n_results=top_k,
+                query_embeddings=[query_embedding],
+                n_results=collection_top_k,
                 include=['documents', 'metadatas', 'distances']
             )
 
@@ -185,7 +199,7 @@ def format_results(results: List[SearchResult], show_scores: bool = False) -> st
     formatted = []
     
     for idx, result in enumerate(results, 1):
-        text = f"\n=== 结果 {idx} ({result.collection_name}) ===\n"
+        text = f"\n+++ 结果 {idx} ({result.collection_name}) +++\n"
         text += f"内容: {result.content}\n"
         
         if show_scores:

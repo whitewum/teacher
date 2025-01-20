@@ -7,7 +7,8 @@ import asyncio
 from openai import OpenAI
 import httpx
 from reranker import MultiCollectionSearcher, Reranker, SearchResult, format_results
-
+import os
+import time
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -29,8 +30,8 @@ class AsyncInferenceEngine:
         chroma_client,
         collection_names: List[str],
         model_name: str = "qwen-long",
-        initial_top_k: int = 5,
-        final_top_k: int = 3,
+        initial_top_k: Optional[int] = None,
+        final_top_k: Optional[int] = None,
         concurrent_limit: int = 3
     ):
         """初始化推理引擎
@@ -40,13 +41,15 @@ class AsyncInferenceEngine:
             chroma_client: ChromaDB客户端实例
             collection_names: 要搜索的集合名称列表
             model_name: 使用的LLM模型名称
-            initial_top_k: 初始检索数量
-            final_top_k: 重排序后保留数量
+            initial_top_k: 初始检索数量，如果为None则使用环境变量
+            final_top_k: 重排序后保留数量，如果为None则使用环境变量
             concurrent_limit: 并发请求限制
         """
         self.model_name = model_name
-        self.initial_top_k = initial_top_k
-        self.final_top_k = final_top_k
+        
+        # 从环境变量获取配置
+        self.initial_top_k = initial_top_k or int(os.getenv("INITIAL_TOP_K", "10"))
+        self.final_top_k = final_top_k or int(os.getenv("FINAL_TOP_K", "5"))
         
         # 初始化OpenAI客户端
         http_client = httpx.Client(timeout=60.0)  # 增加超时时间
@@ -56,8 +59,26 @@ class AsyncInferenceEngine:
             http_client=http_client
         )
         
+        # 获取每个collection的文档数量并计算最大初始召回数量
+        self.collection_limits = {}
+        for name in collection_names:
+            try:
+                collection = chroma_client.get_collection(name)
+                doc_count = len(collection.get()['documents'])
+                # 设置为文档数量的1/N，向上取整，但不超过initial_top_k
+                max_docs = min(self.initial_top_k, -(-doc_count // 1))  # 向上取整除法
+                self.collection_limits[name] = max_docs
+                logger.info(f"Collection {name}: {doc_count} documents, max retrieval: {max_docs}")
+            except Exception as e:
+                logger.error(f"获取集合 {name} 文档数量失败: {str(e)}")
+                self.collection_limits[name] = self.initial_top_k
+
         # 初始化搜索和重排序组件
-        self.searcher = MultiCollectionSearcher(chroma_client, collection_names)
+        self.searcher = MultiCollectionSearcher(
+            chroma_client, 
+            collection_names,
+            collection_limits=self.collection_limits  # 传递每个collection的限制
+        )
         self.reranker = Reranker()
         
         # 并发控制
@@ -139,18 +160,21 @@ class AsyncInferenceEngine:
             推理结果对象
         """
         try:
+            logger.info(f"开始召回")
+            start_time = time.time()
             # 1. 混合检索
             initial_results = self.searcher.hybrid_search(query, top_k=self.initial_top_k)
             
             # 2. 重排序
             reranked_results = self.reranker.rerank(query, initial_results)[:self.final_top_k]
-            
+            logger.info(f"重排序完成, 耗时: {time.time() - start_time:.2f}秒")
             # 3. 生成提示词
             prompt = await self._create_prompt(query, reranked_results)
-            
+            logger.info(f"开始生成流式回答")
+            start_time = time.time()
             # 4. 生成答案
             answer = await self._generate_answer(prompt)
-            
+            logger.info(f"生成答案完成, 耗时: {time.time() - start_time:.2f}秒")
             # 5. 构建返回结果
             result = InferenceResult(
                 answer=answer,
@@ -246,21 +270,7 @@ async def main():
         chroma_client=client,
         collection_names=collection_names
     )
-    
-    # 测试问题
-    test_queries = [
-        "博士毕业去信工就业会有多少钱？",
-        #"劳务费有上限吗？"
-    ]
-    
-    # 测试普通生成
-    print("\n=== 测试普通生成 ===")
-    for query in test_queries:
-        print(f"\n问题: {query}")
-        result = await engine.generate_answer(query, return_context=True)
-        print(f"答案: {result.answer}")
-        print(f"\n上下文: {result.context}")
-        
+
     # 测试流式生成
     print("\n=== 测试流式生成 ===")
     query = "劳务费有上限吗？"

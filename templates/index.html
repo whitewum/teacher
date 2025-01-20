@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>教师工作问答系统</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 20px;
+            font-family: Arial, sans-serif;
+            background-color: #f0f2f5;
+            min-height: 100vh;
+            box-sizing: border-box;
+        }
+        .main-container {
+            display: flex;
+            max-width: 1000px;
+            margin: 0 auto;
+            height: calc(100vh - 40px);
+            padding-bottom: 50px;
+        }
+        .chat-container {
+            flex: 1;
+            background: white;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            display: flex;
+            flex-direction: column;
+            min-width: 300px;
+        }
+        .chat-header {
+            padding: 20px;
+            border-bottom: 1px solid #eee;
+            text-align: center;
+        }
+        .chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px;
+        }
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+        }
+        .message.user {
+            flex-direction: row-reverse;
+        }
+        .message-content {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 10px;
+            font-size: 16px;
+            line-height: 1.5;
+        }
+        .user .message-content {
+            background-color: #1a73e8;
+            color: white;
+        }
+        .bot .message-content {
+            background-color: #f1f3f4;
+            color: black;
+        }
+        .chat-input {
+            padding: 20px;
+            border-top: 1px solid #eee;
+            display: flex;
+            gap: 10px;
+        }
+        input {
+            flex: 1;
+            padding: 12px;
+            border: 1px solid #ddd;
+            border-radius: 20px;
+            font-size: 16px;
+        }
+        button {
+            padding: 12px 24px;
+            background-color: #1a73e8;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover {
+            background-color: #1557b0;
+        }
+        .context {
+            margin-top: 12px;
+            padding: 12px;
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+        }
+        .context details {
+            margin: 4px 0;
+        }
+        .context summary {
+            color: #1a73e8;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+        .footer {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: rgba(248,249,250,0.95);
+            padding: 12px 20px;
+            text-align: center;
+            font-size: 14px;
+            color: #666;
+        }
+        .loading {
+            display: none;
+            margin: 10px 0;
+            color: #666;
+            text-align: center;
+            font-style: italic;
+            animation: pulse 1.5s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+    </style>
+</head>
+<body>
+    <div class="main-container">
+        <div class="chat-container">
+            <div class="chat-header">
+                <h2>教师工作问答助手</h2>
+            </div>
+            <div class="chat-messages" id="chatMessages">
+                <div class="message bot">
+                    <div class="message-content">
+                        <p>你好！我是教师工作问答助手，可以为您解答以下方面的问题：</p>
+                        <ul>
+                            <li>专业技术职务评聘</li>
+                            <li>教学科研业绩考核</li>
+                            <li>采购管理</li>
+                            <li>人才招聘</li>
+                            <li>劳务费发放</li>
+                        </ul>
+                        <p>请问您想了解哪方面的信息？</p>
+                    </div>
+                </div>
+            </div>
+            <div class="loading" id="loading">正在思考...</div>
+            <div class="chat-input">
+                <input type="text" id="questionInput" placeholder="请输入您的问题..." onkeypress="handleKeyPress(event)">
+                <button onclick="askQuestion()">发送</button>
+            </div>
+        </div>
+    </div>
+    <footer class="footer">
+        <span>免责声明：内容由AI生成，请以实际政策文件为准。如有疑问请咨询相关部门。</span>
+    </footer>
+
+    <script>
+        let userId = sessionStorage.getItem('user_id');
+        if (!userId) {
+            userId = 'user-' + Date.now() + '-' + Math.random().toString(36).substr(2, 9);
+            sessionStorage.setItem('user_id', userId);
+        }
+
+        let askSocket;
+        let currentMessageDiv = null;
+        let currentMessageContent = '';
+
+        function setupAskWebSocket() {
+            const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            askSocket = new WebSocket(`${wsProtocol}//${window.location.host}/ws/ask`);
+            
+            askSocket.onopen = () => {
+                console.log("问答 WebSocket 连接已建立");
+            };
+            
+            askSocket.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                
+                switch(data.type) {
+                    case 'status':
+                        handleStatus(data.content);
+                        break;
+                    case 'thinking':
+                        document.getElementById('loading').style.display = 'block';
+                        break;
+                    case 'token':
+                        handleToken(data.content);
+                        break;
+                    case 'context':
+                        handleContext(data.content);
+                        break;
+                    case 'error':
+                        handleError(data.content);
+                        break;
+                    case 'done':
+                        handleDone();
+                        break;
+                }
+            };
+            
+            askSocket.onclose = () => {
+                console.log("WebSocket连接已关闭");
+                setTimeout(setupAskWebSocket, 3000);
+            };
+        }
+
+        function handleStatus(message) {
+            const statusDiv = document.createElement('div');
+            statusDiv.className = 'message bot';
+            statusDiv.innerHTML = `
+                <div class="message-content" style="background-color: #e8f5e9; color: #2e7d32; font-size: 14px; padding: 8px 12px;">
+                    ${message}
+                </div>
+            `;
+            document.getElementById('chatMessages').appendChild(statusDiv);
+            document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+        }
+
+        function handleToken(token) {
+            if (!currentMessageDiv) {
+                currentMessageDiv = document.createElement('div');
+                currentMessageDiv.className = 'message bot';
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'message-content';
+                currentMessageDiv.appendChild(contentDiv);
+                document.getElementById('chatMessages').appendChild(currentMessageDiv);
+            }
+            
+            currentMessageContent += token;
+            const contentDiv = currentMessageDiv.querySelector('.message-content');
+            contentDiv.innerHTML = marked.parse(currentMessageContent);
+            
+            document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+        }
+
+        function handleContext(context) {
+            if (currentMessageDiv) {
+                const contextDiv = document.createElement('div');
+                contextDiv.className = 'context';
+                contextDiv.innerHTML = `
+                    <details>
+                        <summary>参考依据</summary>
+                        <div class="context-content">
+                            ${marked.parse(context)}
+                        </div>
+                    </details>
+                `;
+                currentMessageDiv.querySelector('.message-content').appendChild(contextDiv);
+                
+                document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+            }
+        }
+
+        function handleError(error) {
+            addMessage(`错误: ${error}`, false);
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function handleDone() {
+            currentMessageDiv = null;
+            currentMessageContent = '';
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                askQuestion();
+            }
+        }
+
+        async function askQuestion() {
+            const input = document.getElementById('questionInput');
+            const question = input.value.trim();
+            if (!question) return;
+            
+            addMessage(question, true);
+            input.value = '';
+            
+            currentMessageDiv = null;
+            currentMessageContent = '';
+            
+            if (askSocket && askSocket.readyState === WebSocket.OPEN) {
+                askSocket.send(JSON.stringify({
+                    question: question,
+                    user_id: userId,
+                    return_context: true
+                }));
+            } else {
+                addMessage('连接已断开，请刷新页面重试', false);
+                document.getElementById('loading').style.display = 'none';
+            }
+        }
+
+        function addMessage(text, isUser) {
+            const messagesDiv = document.getElementById('chatMessages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${isUser ? 'user' : 'bot'}`;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.innerHTML = marked.parse(text);
+            messageDiv.appendChild(contentDiv);
+
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+
+        window.onload = function() {
+            setupAskWebSocket();
+        };
+    </script>
+</body>
+</html>
