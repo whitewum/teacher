@@ -227,12 +227,16 @@ class AsyncInferenceEngine:
                 stream=True
             )
             
-            for chunk in stream:
-                if chunk.choices[0].delta.content is not None:
-                    yield {
-                        "type": "token",
-                        "content": chunk.choices[0].delta.content
-                    }
+            async def async_iterate():
+                for chunk in stream:
+                    if chunk.choices[0].delta.content is not None:
+                        yield {
+                            "type": "token",
+                            "content": chunk.choices[0].delta.content
+                        }
+            
+            async for token in async_iterate():
+                yield token
                     
             # 5. 如果需要，发送上下文
             if return_context:

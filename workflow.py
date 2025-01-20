@@ -248,6 +248,7 @@ class WorkflowManager:
                         answer_chunks.append(response["content"])
                     yield response
                 debug_logger.info(f"[{request_id}] 流式生成完成，耗时: {datetime.now() - time_start}")
+                
                 # 记录完整的助手回复
                 self.conversation_manager.add_message(
                     user_id,

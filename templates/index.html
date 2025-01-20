@@ -173,6 +173,7 @@
 
         function setupAskWebSocket() {
             const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            
             askSocket = new WebSocket(`${wsProtocol}//${window.location.host}/ws/ask`);
             
             askSocket.onopen = () => {
@@ -183,7 +184,7 @@
             };
             
             askSocket.onmessage = (event) => {
-                console.debug("收到WebSocket消息:", event.data);
+                console.debug("收到WebSocket消息:", event.data);  // 添加调试日志
                 const data = JSON.parse(event.data);
                 
                 switch(data.type) {
@@ -191,15 +192,19 @@
                         console.log("连接状态:", data.content);
                         break;
                     case 'token':
+                        console.debug(`处理token: ${data.content}`);  // 添加调试日志
                         handleToken(data.content);
                         break;
                     case 'context':
+                        console.debug("处理context");  // 添加调试日志
                         handleContext(data.content);
                         break;
                     case 'error':
+                        console.error("处理error:", data.content);  // 添加调试日志
                         handleError(data.content);
                         break;
                     case 'done':
+                        console.debug("处理done");  // 添加调试日志
                         handleDone();
                         break;
                 }
@@ -216,7 +221,7 @@
         }
 
         function handleToken(token) {
-            console.debug(`收到token: ${token}`);
+            console.debug(`收到token: ${token}`);  // 添加调试日志
             
             if (!currentMessageDiv) {
                 currentMessageDiv = document.createElement('div');
@@ -227,23 +232,36 @@
                 document.getElementById('chatMessages').appendChild(currentMessageDiv);
             }
             
+            // 累积内容
             currentMessageContent += token;
-            const contentDiv = currentMessageDiv.querySelector('.message-content');
-            contentDiv.innerHTML = marked.parse(currentMessageContent);
             
+            // 使用 marked 渲染 Markdown
+            const contentDiv = currentMessageDiv.querySelector('.message-content');
+            
+            // 如果内容包含完整的 Markdown 标记，才使用 marked 渲染
+            if (isCompleteMarkdown(currentMessageContent)) {
+                contentDiv.innerHTML = marked.parse(currentMessageContent);
+            } else {
+                // 否则直接显示文本
+                contentDiv.textContent = currentMessageContent;
+            }
+            
+            // 滚动到底部
             document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
         }
 
+        // 添加判断是否是完整 Markdown 的函数
         function isCompleteMarkdown(text) {
+            // 检查是否包含完整的 Markdown 标记
             const markdownPatterns = [
-                /^#+ .+$/m,
-                /\*\*.+\*\*/,
-                /\*.+\*/,
-                /^\d\. .+$/m,
-                /^- .+$/m,
-                /^>.+$/m,
-                /`.+`/,
-                /^```[\s\S]+```$/m
+                /^#+ .+$/m,  // 标题
+                /\*\*.+\*\*/,  // 粗体
+                /\*.+\*/,  // 斜体
+                /^\d\. .+$/m,  // 有序列表
+                /^- .+$/m,  // 无序列表
+                /^>.+$/m,  // 引用
+                /`.+`/,  // 行内代码
+                /^```[\s\S]+```$/m  // 代码块
             ];
             
             return markdownPatterns.some(pattern => pattern.test(text));
@@ -263,6 +281,7 @@
                 `;
                 currentMessageDiv.querySelector('.message-content').appendChild(contextDiv);
                 
+                // 滚动到底部
                 document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
             }
         }
