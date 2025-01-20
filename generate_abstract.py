@@ -1,5 +1,6 @@
 import os
 import logging
+import argparse
 from typing import Optional
 from openai import OpenAI
 from dotenv import load_dotenv
@@ -111,7 +112,16 @@ class AbstractGenerator:
             logging.error(f"保存摘要到文件 {number}-abstract.txt 失败: {str(e)}")
             return False
 
+def parse_args():
+    parser = argparse.ArgumentParser(description='生成文档摘要')
+    parser.add_argument('--output_dir', 
+                       type=str, 
+                       default="output/purchase/",
+                       help='输出目录路径 (默认: output/purchase/)')
+    return parser.parse_args()
+
 def main():
+    args = parse_args()
     load_dotenv()
     # 从环境变量获取API密钥
     api_key = os.getenv("DASH_SCOPE_API_KEY")
@@ -119,7 +129,7 @@ def main():
         logging.error("未设置 DASH_SCOPE_API_KEY 环境变量")
         return
         
-    output_dir = "output/purchase/"  # 允许通过环境变量设置输出目录
+    output_dir = args.output_dir  # 使用命令行参数
     generator = AbstractGenerator(api_key, output_dir)
     
     # 首先检查并生成背景文件
@@ -144,7 +154,7 @@ def main():
             logging.error("读取背景文件失败")
             return
     
-    # 获取data目录下的所有txt文件
+    # 获取目录下的所有txt文件
     files = [f for f in os.listdir(output_dir) if f.endswith(".txt") and not f.endswith("-abstract.txt")]
     file_numbers = sorted([int(f.split('.')[0]) for f in files])
     

@@ -1,0 +1,7 @@
+rm -rf chroma_db
+mkdir chroma_db
+python embedding_to_db.py --collection p-level --input-dir output/p-level --overwrite
+python embedding_to_db.py --collection performance --input-dir output/performance --overwrite
+python embedding_to_db.py --collection purchase --input-dir output/purchase --overwrite
+python embedding_to_db.py --collection recruit --input-dir output/recruit --overwrite
+python embedding_to_db.py --collection work-fee --input-dir output/work-fee --overwrite

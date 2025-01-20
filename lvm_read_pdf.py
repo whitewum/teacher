@@ -124,25 +124,32 @@ def save_partial_result(text, filename):
 def main():
     import argparse
     
-    
     parser = argparse.ArgumentParser(description='PDF文档处理工具')
     parser.add_argument('--pdf', required=True, help='输入PDF文件路径，例如：data/purchase.pdf')
-    parser.add_argument('--output-dir', required=True, help='输出文本文件路径，例如: output/purchase/')
+    parser.add_argument('--output_dir', required=True, help='输出目录路径，例如: output/purchase/')
     
     args = parser.parse_args()
     
     try:
+        # 检查输入文件是否存在
+        if not os.path.exists(args.pdf):
+            raise FileNotFoundError(f"输入的PDF文件不存在: {args.pdf}")
+            
         print("开始处理PDF...")
         text = process_pdf_with_layout(args.pdf)
         
         # 确保输出目录存在
-        os.makedirs(os.path.dirname(args.output-dir), exist_ok=True)
+        os.makedirs(args.output_dir, exist_ok=True)
+        
+        # 构建输出文件路径
+        output_file = os.path.join(args.output_dir, "0.txt")
         
         # 保存结果
-        with open(args.output-dir, "w", encoding="utf-8") as f:
+        with open(output_file, "w", encoding="utf-8") as f:
             f.write(text)
             
-        print(f"转换完成！结果已保存到 {args.output-dir}。 检查后人工重命名为0.txt(总则), 1.txt（细节）")
+        print(f"转换完成！结果已保存到 {output_file}")
+        print("请检查后根据需要将文件重命名为0.txt(总则)或1.txt（细节）")
         
     except Exception as e:
         print(f"发生错误: {str(e)}")

@@ -16,7 +16,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 class DocumentProcessor:
-    def __init__(self, model_name: str, persist_directory: str, collection_name: str):
+    def __init__(self, model_name: str, persist_directory: str, collection_name: str, overwrite: bool = False):
         """初始化文档处理器"""
         logger.info(f"初始化文档处理器，使用模型: {model_name}")
         
@@ -39,10 +39,39 @@ class DocumentProcessor:
             self.model.eval()
             self.model = self.model.to(self.device)
 
-            # 初始化ChromaDB
+            # 根据不同模型设置维度
+            if "m3" in model_name.lower():
+                self.embedding_dim = 8192
+            elif "large" in model_name.lower():
+                self.embedding_dim = 1024
+            else:
+                self.embedding_dim = 512  # 默认维度
+                
+            logger.info(f"使用向量维度: {self.embedding_dim}")
+
+            # 初始化ChromaDB时指定维度
             os.makedirs(persist_directory, exist_ok=True)
             self.client = chromadb.PersistentClient(path=persist_directory)
-            self.collection = self.client.get_or_create_collection(name=collection_name)
+            
+            # 如果需要覆盖，先删除已存在的collection
+            if overwrite:
+                try:
+                    self.client.delete_collection(collection_name)
+                    logger.info(f"已删除现有collection: {collection_name}")
+                except:
+                    pass
+                    
+            # 创建collection时指定维度
+            self.collection = self.client.create_collection(
+                name=collection_name,
+                embedding_function=None,  # 我们自己处理embedding
+                metadata={"hnsw:space": "cosine", "dimension": self.embedding_dim}
+            ) if overwrite else self.client.get_or_create_collection(
+                name=collection_name,
+                embedding_function=None,
+                metadata={"hnsw:space": "cosine", "dimension": self.embedding_dim}
+            )
+            
             logger.info(f"ChromaDB初始化完成，使用目录: {persist_directory}")
 
         except Exception as e:
@@ -191,6 +220,34 @@ class DocumentProcessor:
             logger.error(f"处理文档失败: {str(e)}")
             raise
 
+    def test_retrieval(self, query: str, n_results: int = 3) -> List[Dict]:
+        """测试文档召回"""
+        try:
+            # 生成查询的embedding
+            query_embedding = self._create_embedding(query)
+            
+            # 执行召回
+            results = self.collection.query(
+                query_embeddings=[query_embedding],
+                n_results=n_results,
+                include=["documents", "distances", "metadatas"]
+            )
+            
+            # 整理返回结果
+            retrieved_docs = []
+            for i in range(len(results['documents'][0])):
+                retrieved_docs.append({
+                    'document': results['documents'][0][i],
+                    'distance': results['distances'][0][i],
+                    'metadata': results['metadatas'][0][i]
+                })
+            
+            return retrieved_docs
+            
+        except Exception as e:
+            logger.error(f"文档召回测试失败: {str(e)}")
+            raise
+
 def main():
     import argparse
     
@@ -199,6 +256,9 @@ def main():
     parser.add_argument('--db-path', default='./chroma_db', help='ChromaDB存储路径')
     parser.add_argument('--collection', help='ChromaDB collection名称')
     parser.add_argument('--input-dir', help='输入文件目录')
+    parser.add_argument('--overwrite', action='store_true', help='是否覆盖现有collection')
+    parser.add_argument('--test-query', help='测试召回的查询语句')
+    parser.add_argument('--top-k', type=int, default=3, help='召回结果数量')
     
     args = parser.parse_args()
     
@@ -206,10 +266,29 @@ def main():
         processor = DocumentProcessor(
             model_name=args.model,
             persist_directory=args.db_path,
-            collection_name=args.collection
+            collection_name=args.collection,
+            overwrite=args.overwrite
         )
-        processor.process_documents(args.input_dir)
-        logger.info("所有文档处理完成")
+        
+        # 如果提供了输入目录，处理文档
+        if args.input_dir:
+            processor.process_documents(args.input_dir)
+            logger.info("所有文档处理完成")
+        
+        # 如果提供了测试查询，执行召回测试
+        if args.test_query:
+            logger.info(f"执行测试查询: {args.test_query}")
+            results = processor.test_retrieval(args.test_query, args.top_k)
+            
+            print("\n===== 召回结果 =====")
+            for i, result in enumerate(results, 1):
+                print(f"\n结果 {i}:")
+                print(f"相似度距离: {result['distance']:.4f}")
+                print(f"来源文件: {result['metadata']['source']}")
+                print(f"文档片段: {result['metadata']['chunk']}")
+                print("内容预览: " + result['document'][:200] + "...")
+                print("-" * 50)
+                
     except Exception as e:
         logger.error(f"程序执行失败: {str(e)}")
         raise
