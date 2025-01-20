@@ -177,17 +177,18 @@
             
             askSocket.onopen = () => {
                 console.log("问答 WebSocket 连接已建立");
+                askSocket.send(JSON.stringify({
+                    user_id: userId
+                }));
             };
             
             askSocket.onmessage = (event) => {
+                console.debug("收到WebSocket消息:", event.data);
                 const data = JSON.parse(event.data);
                 
                 switch(data.type) {
                     case 'status':
-                        handleStatus(data.content);
-                        break;
-                    case 'thinking':
-                        document.getElementById('loading').style.display = 'block';
+                        console.log("连接状态:", data.content);
                         break;
                     case 'token':
                         handleToken(data.content);
@@ -208,21 +209,15 @@
                 console.log("WebSocket连接已关闭");
                 setTimeout(setupAskWebSocket, 3000);
             };
-        }
-
-        function handleStatus(message) {
-            const statusDiv = document.createElement('div');
-            statusDiv.className = 'message bot';
-            statusDiv.innerHTML = `
-                <div class="message-content" style="background-color: #e8f5e9; color: #2e7d32; font-size: 14px; padding: 8px 12px;">
-                    ${message}
-                </div>
-            `;
-            document.getElementById('chatMessages').appendChild(statusDiv);
-            document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+            
+            askSocket.onerror = (error) => {
+                console.error("WebSocket错误:", error);
+            };
         }
 
         function handleToken(token) {
+            console.debug(`收到token: ${token}`);
+            
             if (!currentMessageDiv) {
                 currentMessageDiv = document.createElement('div');
                 currentMessageDiv.className = 'message bot';
@@ -237,6 +232,21 @@
             contentDiv.innerHTML = marked.parse(currentMessageContent);
             
             document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+        }
+
+        function isCompleteMarkdown(text) {
+            const markdownPatterns = [
+                /^#+ .+$/m,
+                /\*\*.+\*\*/,
+                /\*.+\*/,
+                /^\d\. .+$/m,
+                /^- .+$/m,
+                /^>.+$/m,
+                /`.+`/,
+                /^```[\s\S]+```$/m
+            ];
+            
+            return markdownPatterns.some(pattern => pattern.test(text));
         }
 
         function handleContext(context) {
@@ -263,6 +273,10 @@
         }
 
         function handleDone() {
+            if (currentMessageDiv) {
+                const contentDiv = currentMessageDiv.querySelector('.message-content');
+                contentDiv.innerHTML = marked.parse(currentMessageContent);
+            }
             currentMessageDiv = null;
             currentMessageContent = '';
             document.getElementById('loading').style.display = 'none';
@@ -281,6 +295,8 @@
             
             addMessage(question, true);
             input.value = '';
+            
+            document.getElementById('loading').style.display = 'block';
             
             currentMessageDiv = null;
             currentMessageContent = '';

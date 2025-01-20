@@ -11,6 +11,7 @@ from openai import OpenAI
 from workflow import WorkflowManager
 import chromadb
 from inference import AsyncInferenceEngine
+from fastapi import WebSocketDisconnect
 
 # 配置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -32,18 +33,36 @@ templates = Jinja2Templates(directory=os.path.join(BASE_DIR, "templates"))
 # WebSocket连接管理器
 class ConnectionManager:
     def __init__(self):
-        self.active_connections = []
+        self.connections = {}
         self.lock = asyncio.Lock()
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
+    async def connect(self, websocket: WebSocket, user_id: str):
         async with self.lock:
-            self.active_connections.append(websocket)
+            self.connections[user_id] = websocket
+            logger.info(f"新的WebSocket连接已建立 (user_id: {user_id})")
 
     async def disconnect(self, websocket: WebSocket):
         async with self.lock:
-            if websocket in self.active_connections:
-                self.active_connections.remove(websocket)
+            user_id_to_remove = None
+            for user_id, ws in self.connections.items():
+                if ws == websocket:
+                    user_id_to_remove = user_id
+                    break
+            if user_id_to_remove:
+                del self.connections[user_id_to_remove]
+                logger.info(f"WebSocket连接已移除 (user_id: {user_id_to_remove})")
+
+    async def send_message(self, user_id: str, message: dict):
+        """发送消息给指定用户"""
+        if user_id in self.connections:
+            try:
+                await self.connections[user_id].send_json(message)
+            except WebSocketDisconnect:
+                logger.info(f"发送消息时检测到连接断开 (user_id: {user_id})")
+                await self.disconnect(self.connections[user_id])
+            except Exception as e:
+                logger.error(f"发送消息失败 (user_id: {user_id}): {str(e)}")
+                await self.disconnect(self.connections[user_id])
 
 manager = ConnectionManager()
 
@@ -100,61 +119,83 @@ async def home(request: Request):
 @app.websocket("/ws/ask")
 async def websocket_ask_endpoint(websocket: WebSocket):
     """处理流式问答的WebSocket连接"""
+    user_id = None
     try:
-        await manager.connect(websocket)
+        # 先接受连接
+        await websocket.accept()
+        
+        # 等待客户端发送初始化消息
+        init_data = await websocket.receive_json()
+        user_id = init_data.get('user_id')
+        
+        if not user_id:
+            await websocket.close(code=1008, reason="No user_id provided")
+            return
+            
+        await manager.connect(websocket, user_id)
+        
         # 发送连接成功消息
-        await websocket.send_json({
+        await manager.send_message(user_id, {
             "type": "status",
-            "content": "✅ 系统已连接，可以开始提问"
+            "content": "✅ 系统已连接"
         })
         
-        while True:
+        # 使用标志来跟踪连接状态
+        is_connected = True
+        while is_connected:
             try:
                 # 接收前端发送的问题
                 data = await websocket.receive_json()
                 question = data.get('question')
-                user_id = data.get('user_id')
                 return_context = data.get('return_context', True)
                 
-                if not question or not user_id:
-                    await websocket.send_json({
+                if not question:
+                    await manager.send_message(user_id, {
                         "type": "error",
                         "content": "无效的请求数据"
                     })
                     continue
                 
-                # 发送思考状态
-                await websocket.send_json({
-                    "type": "thinking",
-                    "content": "正在思考..."
-                })
-                
                 # 流式生成答案
-                async for response in workflow_manager.process_message_stream(
-                    user_id=user_id,
-                    message=question,
-                    return_context=return_context
-                ):
-                    await websocket.send_json(response)
-                    
-                # 发送完成标记
-                await websocket.send_json({
-                    "type": "done",
-                    "content": None
-                })
+                try:
+                    async for response in workflow_manager.process_message_stream(
+                        user_id=user_id,
+                        message=question,
+                        return_context=return_context
+                    ):
+                        await manager.send_message(user_id, response)
+                        
+                    # 发送完成标记
+                    await manager.send_message(user_id, {
+                        "type": "done",
+                        "content": None
+                    })
+                except Exception as e:
+                    logger.error(f"生成答案时出错: {str(e)}")
+                    await manager.send_message(user_id, {
+                        "type": "error",
+                        "content": f"生成答案时出错: {str(e)}"
+                    })
                 
+            except WebSocketDisconnect:
+                logger.info(f"WebSocket连接断开 (user_id: {user_id})")
+                is_connected = False
+                break
             except Exception as e:
-                logger.error(f"处理问题时出错: {str(e)}")
-                await websocket.send_json({
+                logger.error(f"处理消息时出错: {str(e)}")
+                await manager.send_message(user_id, {
                     "type": "error",
-                    "content": f"处理问题时出错: {str(e)}"
+                    "content": f"处理消息时出错: {str(e)}"
                 })
                 
+    except WebSocketDisconnect:
+        logger.info(f"WebSocket连接初始化时断开 (user_id: {user_id})")
     except Exception as e:
         logger.error(f"WebSocket连接出错: {str(e)}")
     finally:
-        await manager.disconnect(websocket)
-        logger.info("问答WebSocket连接已断开")
+        if user_id:
+            await manager.disconnect(websocket)
+            logger.info(f"WebSocket连接清理完成 (user_id: {user_id})")
 
 def main():
     """主函数"""
