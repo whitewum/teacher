@@ -3,3 +3,4 @@ data/
 raw_input/
 checkpoint.json
 .DS_Store
+.env
