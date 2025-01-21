@@ -1,6 +1,7 @@
 venv
-data/
 raw_input/
-checkpoint.json
+chroma_db/
+.checkpoint.json
 .DS_Store
 .env
+debug.log
