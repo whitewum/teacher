@@ -227,18 +227,22 @@ class AsyncInferenceEngine:
                 stream=True
             )
             
-            async def async_iterate():
-                for chunk in stream:
-                    if chunk.choices[0].delta.content is not None:
-                        yield {
-                            "type": "token",
-                            "content": chunk.choices[0].delta.content
-                        }
-            
-            async for token in async_iterate():
-                yield token
+            # 5. 处理流式响应，添加延迟
+            current_sentence = ""
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    content = chunk.choices[0].delta.content
+                    current_sentence += content
                     
-            # 5. 如果需要，发送上下文
+
+                    await asyncio.sleep(0.02)  # 普通token的延迟
+                    
+                    yield {
+                        "type": "token",
+                        "content": content
+                    }
+                    
+            # 6. 如果需要，发送上下文
             if return_context:
                 yield {
                     "type": "context",
