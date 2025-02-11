@@ -33,7 +33,7 @@ env/
 
 # Project specific
 .env
-chroma_db/
+chroma_db/*
 temp_page_*.jpg
 .checkpoint.json
 debug.log
