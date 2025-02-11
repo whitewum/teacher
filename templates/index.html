@@ -53,6 +53,7 @@
             border-radius: 10px;
             font-size: 16px;
             line-height: 1.5;
+            position: relative;
         }
         .user .message-content {
             background-color: #1a73e8;
@@ -88,19 +89,34 @@
             background-color: #1557b0;
         }
         .context {
-            margin-top: 12px;
+            margin-top: 16px;
             padding: 12px;
             background-color: #f8f9fa;
             border-radius: 8px;
             border: 1px solid #e9ecef;
         }
         .context details {
-            margin: 4px 0;
+            margin: 0;
         }
         .context summary {
-            color: #1a73e8;
             cursor: pointer;
-            padding: 4px 8px;
+            padding: 8px;
+            color: #1a73e8;
+            font-weight: 500;
+        }
+        .context-content {
+            padding: 12px;
+            color: #555;
+            line-height: 1.5;
+            border-top: 1px solid #eee;
+            margin-top: 8px;
+        }
+        .context details[open] summary {
+            margin-bottom: 8px;
+        }
+        .message-content .context {
+            margin-top: 12px;
+            display: block;
         }
         .footer {
             position: fixed;
@@ -221,7 +237,7 @@
         }
 
         function handleToken(token) {
-            console.debug(`收到token: ${token}`);  // 添加调试日志
+            console.debug(`收到token: ${token}`);
             
             if (!currentMessageDiv) {
                 currentMessageDiv = document.createElement('div');
@@ -232,58 +248,67 @@
                 document.getElementById('chatMessages').appendChild(currentMessageDiv);
             }
             
-            // 累积内容
+            const contentDiv = currentMessageDiv.querySelector('.message-content');
             currentMessageContent += token;
             
-            // 使用 marked 渲染 Markdown
-            const contentDiv = currentMessageDiv.querySelector('.message-content');
+            // Create a temporary div to hold the parsed markdown content
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = marked.parse(currentMessageContent);
             
-            // 如果内容包含完整的 Markdown 标记，才使用 marked 渲染
-            if (isCompleteMarkdown(currentMessageContent)) {
-                contentDiv.innerHTML = marked.parse(currentMessageContent);
-            } else {
-                // 否则直接显示文本
-                contentDiv.textContent = currentMessageContent;
+            // Clear the content div while preserving the context
+            const existingContext = contentDiv.querySelector('.context');
+            contentDiv.innerHTML = '';
+            
+            // Add the new content
+            while (tempDiv.firstChild) {
+                contentDiv.appendChild(tempDiv.firstChild);
             }
             
-            // 滚动到底部
+            // Re-add the context if it exists
+            if (existingContext) {
+                contentDiv.appendChild(existingContext);
+            }
+            
             document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
         }
 
-        // 添加判断是否是完整 Markdown 的函数
-        function isCompleteMarkdown(text) {
-            // 检查是否包含完整的 Markdown 标记
-            const markdownPatterns = [
-                /^#+ .+$/m,  // 标题
-                /\*\*.+\*\*/,  // 粗体
-                /\*.+\*/,  // 斜体
-                /^\d\. .+$/m,  // 有序列表
-                /^- .+$/m,  // 无序列表
-                /^>.+$/m,  // 引用
-                /`.+`/,  // 行内代码
-                /^```[\s\S]+```$/m  // 代码块
-            ];
-            
-            return markdownPatterns.some(pattern => pattern.test(text));
-        }
-
         function handleContext(context) {
-            if (currentMessageDiv) {
+            console.debug("收到上下文:", context);
+            if (!currentMessageDiv) return;
+            
+            const contentDiv = currentMessageDiv.querySelector('.message-content');
+            if (!contentDiv) {
+                console.error("找不到 message-content div");
+                return;
+            }
+            
+            // Remove existing context if any
+            const existingContext = contentDiv.querySelector('.context');
+            if (existingContext) {
+                existingContext.remove();
+            }
+            
+            // Only create context div if we have content
+            if (context && context.trim()) {
                 const contextDiv = document.createElement('div');
                 contextDiv.className = 'context';
+                
+                const parsedContext = marked.parse(context);
+                
                 contextDiv.innerHTML = `
                     <details>
                         <summary>参考依据</summary>
                         <div class="context-content">
-                            ${marked.parse(context)}
+                            ${parsedContext}
                         </div>
                     </details>
                 `;
-                currentMessageDiv.querySelector('.message-content').appendChild(contextDiv);
                 
-                // 滚动到底部
-                document.getElementById('chatMessages').scrollTop = document.getElementById('chatMessages').scrollHeight;
+                contentDiv.appendChild(contextDiv);
             }
+            
+            const chatMessages = document.getElementById('chatMessages');
+            chatMessages.scrollTop = chatMessages.scrollHeight;
         }
 
         function handleError(error) {
@@ -294,8 +319,17 @@
         function handleDone() {
             if (currentMessageDiv) {
                 const contentDiv = currentMessageDiv.querySelector('.message-content');
+                const existingContext = contentDiv.querySelector('.context');
+                
+                // Parse the final message content
                 contentDiv.innerHTML = marked.parse(currentMessageContent);
+                
+                // Re-add the context if it exists
+                if (existingContext) {
+                    contentDiv.appendChild(existingContext);
+                }
             }
+            
             currentMessageDiv = null;
             currentMessageContent = '';
             document.getElementById('loading').style.display = 'none';

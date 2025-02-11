@@ -199,7 +199,7 @@ def format_results(results: List[SearchResult], show_scores: bool = False) -> st
     formatted = []
     
     for idx, result in enumerate(results, 1):
-        text = f"\n+++ 结果 {idx} ({result.collection_name}) +++\n"
+        text = f"\n ++++++++ 召回结果 {idx} ({result.collection_name}) ++++++++ \n"
         text += f"内容: {result.content}\n"
         
         if show_scores:

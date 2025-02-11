@@ -168,7 +168,7 @@ async def websocket_ask_endpoint(websocket: WebSocket):
                     async for response in workflow_manager.process_message_stream(
                         user_id=user_id,
                         message=question,
-                        return_context=return_context
+                        return_context=True
                     ):
                         await manager.send_message(user_id, response)
                         
