@@ -29,7 +29,8 @@ class AsyncInferenceEngine:
         api_key: str,
         chroma_client,
         collection_names: List[str],
-        model_name: str = "qwen-long",
+        base_url: str,
+        model_name: str ,
         initial_top_k: Optional[int] = None,
         final_top_k: Optional[int] = None,
         concurrent_limit: int = 3
@@ -53,11 +54,14 @@ class AsyncInferenceEngine:
         
         # 初始化OpenAI客户端
         http_client = httpx.Client(timeout=60.0)  # 增加超时时间
-        self.client = OpenAI(
-            api_key=api_key,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-            http_client=http_client
-        )
+        if self.model_name == "qwen-long" or self.model_name == "deepseek/deepseek-r1-distill-qwen-14b":
+            self.client = OpenAI(
+                api_key=api_key,
+                base_url=base_url,
+                http_client=http_client
+            )
+        else:
+            raise ValueError(f"不支持的模型: {self.model_name}")
         
         # 获取每个collection的文档数量并计算最大初始召回数量
         self.collection_limits = {}
@@ -119,7 +123,7 @@ class AsyncInferenceEngine:
     async def _generate_answer(
         self,
         prompt: str,
-        temperature: float = 0.2,
+        temperature: float = 0.6,
         max_tokens: int = 4096
     ) -> str:
         """生成答案
@@ -132,7 +136,10 @@ class AsyncInferenceEngine:
         Returns:
             生成的答案
         """
+
         try:
+            if self.model_name == "deepseek/deepseek-r1-distill-qwen-14b":
+                prompt = prompt + """\n请逐步推理，然后给出答案。<think>\n"""
             response = await asyncio.to_thread(
                 self.client.chat.completions.create,
                 model=self.model_name,
@@ -140,7 +147,20 @@ class AsyncInferenceEngine:
                 temperature=temperature,
                 max_tokens=max_tokens
             )
-            return response.choices[0].message.content.strip()
+            ret = response.choices[0].message.content.strip()
+            if self.model_name == "qwen-long":
+                return ret
+            else: # deepseek/deepseek-r1-distill-qwen-14b
+                import re
+                # 如果没有匹配，则取 "</think>" 之后的所有内容
+                pos = ret.find("</think>")
+                if pos != -1:
+                    extracted_text = ret[pos + len("</think>"):].strip()
+                else:
+                    # 如果没有匹配，则取 ret 的最后一行
+                    lines = ret.strip().splitlines()
+                    extracted_text = lines[-1] if lines else ret
+                    return extracted_text
         except Exception as e:
             logger.error(f"生成答案时出错: {str(e)}")
             raise
@@ -264,10 +284,14 @@ async def main():
     
     # 加载环境变量
     load_dotenv()
-    API_KEY = os.getenv("DASH_SCOPE_API_KEY")
+    API_KEY = os.getenv("API_KEY")
     if not API_KEY:
-        raise ValueError("DASH_SCOPE_API_KEY 环境变量未设置")
-        
+        raise ValueError("API_KEY 环境变量未设置")
+    BASE_URL = os.getenv("BASE_URL") 
+    MODEL_NAME = os.getenv("MODEL_NAME")  
+    print(f"BASE_URL: {BASE_URL}")
+    print(f"MODEL_NAME: {MODEL_NAME}")
+    print(f"API_KEY: {API_KEY}")
     # 初始化ChromaDB客户端
     client = chromadb.PersistentClient(path="./chroma_db")
     
@@ -275,6 +299,8 @@ async def main():
     collection_names = ["p-level", "performance", "purchase", "recruit", "work-fee"]
     engine = AsyncInferenceEngine(
         api_key=API_KEY,
+        base_url=BASE_URL,
+        model_name=MODEL_NAME,
         chroma_client=client,
         collection_names=collection_names
     )

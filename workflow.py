@@ -69,7 +69,9 @@ class ConversationManager:
 class IntentClassifier:
     """意图分类器"""
     
-    def __init__(self, llm_client: OpenAI):
+    def __init__(self, model_name, base_url, llm_client: OpenAI):
+        self.model_name = model_name
+        self.base_url = base_url
         self.llm_client = llm_client
         
     async def classify_intent(self, query: str, history: str = "") -> str:
@@ -86,17 +88,38 @@ class IntentClassifier:
 当前问题：{query}
 
 返回意图标签："""
-
+        if self.model_name == "deepseek/deepseek-r1-distill-qwen-14b":
+            prompt += r"""\n请逐步推理，然后将回答放在 `\box{<answer>}` 中。<think>\n"""
         try:
             response = await asyncio.to_thread(
                 self.llm_client.chat.completions.create,
-                model="qwen-long",
+                model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
-                max_tokens=10
+                max_tokens=10 if self.model_name == "qwen-long" else 1024
             )
             intent = response.choices[0].message.content.strip().upper()
-            return intent if intent in ["HANDBOOK", "CHAT", "CLARIFICATION", "OTHER"] else "OTHER"
+            if self.model_name == "qwen-long":
+                return intent if intent in ["HANDBOOK", "CHAT", "CLARIFICATION", "OTHER"] else "OTHER"
+            else: # deepseek/deepseek-r1-distill-qwen-14b
+                import re
+                # 先尝试匹配\box{}中的内容
+                pos = intent.find("\\box{")
+                if pos != -1:
+                    # 找到最后一个右大括号的位置
+                    end_pos = intent.rfind("}")
+                    if end_pos != -1:
+                        extracted_text = intent[pos + len("\\box{"):end_pos].strip()
+                    else:
+                        extracted_text = intent[pos + len("\\box{"):].strip()
+                else:
+                    extracted_text = intent
+                # 查看 ["HANDBOOK", "CHAT", "CLARIFICATION", "OTHER"] 哪个可以再 extracted_text 里面被匹配到：  
+                for intent in ["HANDBOOK", "CHAT", "CLARIFICATION", "OTHER"]:
+                    if intent in extracted_text:
+                        return intent
+                return "OTHER"
+
         except Exception as e:
             logger.error(f"意图分类出错: {str(e)}")
             return "OTHER"
@@ -104,7 +127,9 @@ class IntentClassifier:
 class QueryRewriter:
     """查询改写器"""
     
-    def __init__(self, llm_client: OpenAI):
+    def __init__(self, model_name, base_url, llm_client: OpenAI):
+        self.model_name = model_name
+        self.base_url = base_url
         self.llm_client = llm_client
         
     async def rewrite_query(self, query: str, history: str) -> str:
@@ -129,15 +154,41 @@ class QueryRewriter:
 
 只需要返回改写后的查询，不要返回任何其他内容："""
 
+        if self.model_name == "deepseek/deepseek-r1-distill-qwen-14b":
+            prompt += r"""\n请逐步推理，然后将回答放在 `\box{<answer>}` 中。<think>\n"""
         try:
             response = await asyncio.to_thread(
                 self.llm_client.chat.completions.create,
-                model="qwen-long",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.3,
-                max_tokens=200
+                model=self.model_name,
+                messages=[{"role": "user", "content": prompt }],
+                temperature=0.6,
+                max_tokens=200 if self.model_name == "qwen-long" else 1024
             )
-            return response.choices[0].message.content.strip()
+            ret = response.choices[0].message.content.strip()
+            if self.model_name == "qwen-long":
+                return ret
+            else: # deepseek/deepseek-r1-distill-qwen-14b
+                import re
+                # 先尝试匹配\box{}中的内容
+                pos = ret.find("\\box{")
+                if pos != -1:
+                    # 找到最后一个右大括号的位置
+                    end_pos = ret.rfind("}")
+                    if end_pos != -1:
+                        extracted_text = ret[pos + len("\\box{"):end_pos].strip()
+                    else:
+                        extracted_text = ret[pos + len("\\box{"):].strip()
+                else:
+                    # 尝试匹配</think>后的内容
+                    pos = ret.find("</think>")
+                    if pos != -1:
+                        extracted_text = ret[pos + len("</think>"):].strip()
+                    else:
+                        # 如果都没有匹配，则取最后一行
+                        lines = ret.strip().splitlines()
+                        extracted_text = lines[-1] if lines else ret
+                print("\n提取结果:", extracted_text)
+                return extracted_text
         except Exception as e:
             logger.error(f"查询改写出错: {str(e)}")
             return query
@@ -145,12 +196,14 @@ class QueryRewriter:
 class WorkflowManager:
     """工作流管理器"""
     
-    def __init__(self, inference_engine, llm_client: OpenAI):
+    def __init__(self, inference_engine, model_name, base_url, llm_client: OpenAI):
         self.inference_engine = inference_engine
         self.llm_client = llm_client
+        self.model_name = model_name
+        self.base_url = base_url
         self.conversation_manager = ConversationManager()
-        self.intent_classifier = IntentClassifier(llm_client)
-        self.query_rewriter = QueryRewriter(llm_client)
+        self.intent_classifier = IntentClassifier(model_name, base_url, llm_client)
+        self.query_rewriter = QueryRewriter(model_name, base_url, llm_client)
         
     async def process_message(self, user_id: str, message: str) -> WorkflowResult:
         """处理用户消息"""
@@ -289,17 +342,43 @@ class WorkflowManager:
         else:
             prompt = f"""你是一个助手。请礼貌地告诉用户你主要负责回答教师工作制度相关的问题，并给出一些示例问题，具体只包括{AVAILABLE}。"""
             
-        prompt += f"\n\n用户输入：{query}\n\n请生成回复："
-        
+        prompt += f"\n\n用户输入：{query}\n\n"
+        if self.model_name == "deepseek/deepseek-r1-distill-qwen-14b":
+            prompt += r"""\n请逐步推理，然后将回答放在 `\box{<answer>}` 中。<think>\n"""
         try:
             response = await asyncio.to_thread(
                 self.llm_client.chat.completions.create,
-                model="qwen-long",
+                model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
-                temperature=0.7,
+                temperature=0.6,
                 max_tokens=150
             )
-            return response.choices[0].message.content.strip()
+            ret = response.choices[0].message.content.strip()
+            if self.model_name == "qwen-long":
+                return ret
+            else: # deepseek/deepseek-r1-distill-qwen-14b
+                import re
+                # 先尝试匹配\box{}中的内容
+                pos = ret.find("\\box{")
+                if pos != -1:
+                    # 找到最后一个右大括号的位置
+                    end_pos = ret.rfind("}")
+                    if end_pos != -1:
+                        extracted_text = ret[pos + len("\\box{"):end_pos].strip()
+                    else:
+                        extracted_text = ret[pos + len("\\box{"):].strip()
+                else:
+                    # 尝试匹配</think>后的内容
+                    pos = ret.find("</think>")
+                    if pos != -1:
+                        extracted_text = ret[pos + len("</think>"):].strip()
+                    else:
+                        # 如果都没有匹配，则取最后一行
+                        lines = ret.strip().splitlines()
+                        extracted_text = lines[-1] if lines else ret
+                print("\n提取结果:", extracted_text)
+                return extracted_text
+
         except Exception as e:
             logger.error(f"处理非手册查询出错: {str(e)}")
             return "抱歉，我暂时无法回应。"
@@ -313,9 +392,14 @@ async def main():
     
     # 加载环境变量
     load_dotenv()
-    API_KEY = os.getenv("DASH_SCOPE_API_KEY")
+    API_KEY = os.getenv("API_KEY")
     if not API_KEY:
-        raise ValueError("DASH_SCOPE_API_KEY 环境变量未设置")
+        raise ValueError("API_KEY 环境变量未设置")
+    BASE_URL = os.getenv("BASE_URL") 
+    MODEL_NAME = os.getenv("MODEL_NAME")  
+    print(f"BASE_URL: {BASE_URL}")
+    print(f"MODEL_NAME: {MODEL_NAME}")
+    print(f"API_KEY: {API_KEY}")
         
     # 初始化 ChromaDB 客户端
     client = chromadb.PersistentClient(path="./chroma_db")
@@ -324,6 +408,8 @@ async def main():
     collection_names = ["p-level", "performance", "purchase", "recruit", "work-fee"]
     inference_engine = AsyncInferenceEngine(
         api_key=API_KEY,
+        base_url=BASE_URL,
+        model_name=MODEL_NAME,
         chroma_client=client,
         collection_names=collection_names
     )
@@ -332,12 +418,12 @@ async def main():
     http_client = httpx.Client(timeout=60.0)
     llm_client = OpenAI(
         api_key=API_KEY,
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        base_url=BASE_URL,
         http_client=http_client
     )
     
     # 初始化工作流管理器
-    workflow = WorkflowManager(inference_engine, llm_client)
+    workflow = WorkflowManager(inference_engine, MODEL_NAME, BASE_URL, llm_client)
     
     # 测试用例
     test_cases = [

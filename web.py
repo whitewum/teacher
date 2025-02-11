@@ -75,19 +75,26 @@ async def startup_event():
     global workflow_manager
     
     try:
-        # 加载环境变量
-        load_dotenv()  
-        API_KEY = os.getenv("DASH_SCOPE_API_KEY")
+        load_dotenv()
+        API_KEY = os.getenv("API_KEY")
         if not API_KEY:
-            raise ValueError("DASH_SCOPE_API_KEY 环境变量未设置")
+            raise ValueError("API_KEY 环境变量未设置")
+        BASE_URL = os.getenv("BASE_URL") 
+        MODEL_NAME = os.getenv("MODEL_NAME")  
+        print(f"BASE_URL: {BASE_URL}")
+        print(f"MODEL_NAME: {MODEL_NAME}")
+        print(f"API_KEY: {API_KEY}")
         
         # 初始化 ChromaDB 客户端
         client = chromadb.PersistentClient(path="./chroma_db")
         
         # 初始化推理引擎
         collection_names = ["p-level", "performance", "purchase", "recruit", "work-fee"]
+
         inference_engine = AsyncInferenceEngine(
             api_key=API_KEY,
+            base_url=BASE_URL,
+            model_name=MODEL_NAME,
             chroma_client=client,
             collection_names=collection_names
         )
@@ -96,12 +103,12 @@ async def startup_event():
         http_client = httpx.Client(timeout=60.0)
         llm_client = OpenAI(
             api_key=API_KEY,
-            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            base_url=BASE_URL,
             http_client=http_client
         )
         
         # 初始化工作流管理器
-        workflow_manager = WorkflowManager(inference_engine, llm_client)
+        workflow_manager = WorkflowManager(inference_engine, MODEL_NAME, BASE_URL, llm_client)
         
         logger.info("系统初始化完成")
     except Exception as e:
